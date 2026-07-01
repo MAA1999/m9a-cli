@@ -25,6 +25,10 @@ on:
         description: Publish as prerelease.
         required: false
         default: "true"
+      release_body:
+        description: Release body markdown. Leave empty to use the fallback body.
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -36,23 +40,37 @@ jobs:
       tag: ${{ steps.meta.outputs.tag }}
       source_repo: ${{ steps.meta.outputs.source_repo }}
       source_ref: ${{ steps.meta.outputs.source_ref }}
+      source_sha: ${{ steps.meta.outputs.source_sha }}
       maa_framework_version: ${{ steps.meta.outputs.maa_framework_version }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+      release_body: ${{ steps.meta.outputs.release_body }}
     steps:
       - id: meta
         shell: bash
         run: |
-          tag="${{ github.event.client_payload.tag || github.event.inputs.tag || 'v0.0.0-local' }}"
-          source_repo="${{ github.event.client_payload.source_repo || github.event.inputs.source_repo || 'MAA1999/M9A' }}"
-          source_ref="${{ github.event.client_payload.source_ref || github.event.client_payload.tag || github.event.inputs.source_ref || 'main' }}"
-          maa_framework_version="${{ github.event.client_payload.maa_framework_version || github.event.inputs.maa_framework_version || 'v5.10.5' }}"
-          is_prerelease="${{ github.event.client_payload.is_prerelease || github.event.inputs.is_prerelease || 'true' }}"
+          tag="$(jq -r '.client_payload.tag // .inputs.tag // "v0.0.0-local"' "$GITHUB_EVENT_PATH")"
+          source_repo="$(jq -r '.client_payload.source_repo // .inputs.source_repo // "MAA1999/M9A"' "$GITHUB_EVENT_PATH")"
+          source_ref="$(jq -r '.client_payload.source_ref // .client_payload.tag // .inputs.source_ref // "main"' "$GITHUB_EVENT_PATH")"
+          source_sha="$(jq -r '.client_payload.source_sha // ""' "$GITHUB_EVENT_PATH")"
+          maa_framework_version="$(jq -r '.client_payload.maa_framework_version // .inputs.maa_framework_version // "v5.10.5"' "$GITHUB_EVENT_PATH")"
+          is_prerelease="$(jq -r '.client_payload.is_prerelease // .inputs.is_prerelease // "true"' "$GITHUB_EVENT_PATH")"
+          release_body="$(jq -r '.client_payload.release_body // .inputs.release_body // ""' "$GITHUB_EVENT_PATH")"
 
-          echo "tag=$tag" | tee -a "$GITHUB_OUTPUT"
-          echo "source_repo=$source_repo" | tee -a "$GITHUB_OUTPUT"
-          echo "source_ref=$source_ref" | tee -a "$GITHUB_OUTPUT"
-          echo "maa_framework_version=$maa_framework_version" | tee -a "$GITHUB_OUTPUT"
-          echo "is_prerelease=$is_prerelease" | tee -a "$GITHUB_OUTPUT"
+          if [ -z "$release_body" ]; then
+            release_body="$(printf 'M9A CLI package release.\n\nSource: `%s`\nRef: `%s`' "$source_repo" "$source_ref")"
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "source_repo=$source_repo"
+            echo "source_ref=$source_ref"
+            echo "source_sha=$source_sha"
+            echo "maa_framework_version=$maa_framework_version"
+            echo "is_prerelease=$is_prerelease"
+            echo "release_body<<__M9A_RELEASE_BODY__"
+            printf '%s\n' "$release_body"
+            echo "__M9A_RELEASE_BODY__"
+          } | tee -a "$GITHUB_OUTPUT"
 
   windows:
     needs: meta
@@ -71,9 +89,15 @@ jobs:
       - name: Checkout M9A source
         shell: bash
         run: |
-          git submodule set-url M9A "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
-          git submodule update --init --recursive --depth 1
-          git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"
+          git init M9A
+          git -C M9A remote add origin "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
+          if ! git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"; then
+            if [ -z "${{ needs.meta.outputs.source_sha }}" ]; then
+              echo "Failed to fetch source_ref and source_sha is empty."
+              exit 1
+            fi
+            git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_sha }}"
+          fi
           git -C M9A checkout --detach FETCH_HEAD
           git -C M9A submodule update --init --recursive --depth 1
 
@@ -132,9 +156,15 @@ jobs:
       - name: Checkout M9A source
         shell: bash
         run: |
-          git submodule set-url M9A "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
-          git submodule update --init --recursive --depth 1
-          git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"
+          git init M9A
+          git -C M9A remote add origin "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
+          if ! git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"; then
+            if [ -z "${{ needs.meta.outputs.source_sha }}" ]; then
+              echo "Failed to fetch source_ref and source_sha is empty."
+              exit 1
+            fi
+            git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_sha }}"
+          fi
           git -C M9A checkout --detach FETCH_HEAD
           git -C M9A submodule update --init --recursive --depth 1
 
@@ -183,9 +213,15 @@ jobs:
       - name: Checkout M9A source
         shell: bash
         run: |
-          git submodule set-url M9A "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
-          git submodule update --init --recursive --depth 1
-          git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"
+          git init M9A
+          git -C M9A remote add origin "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
+          if ! git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"; then
+            if [ -z "${{ needs.meta.outputs.source_sha }}" ]; then
+              echo "Failed to fetch source_ref and source_sha is empty."
+              exit 1
+            fi
+            git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_sha }}"
+          fi
           git -C M9A checkout --detach FETCH_HEAD
           git -C M9A submodule update --init --recursive --depth 1
 
@@ -263,8 +299,4 @@ jobs:
           files: release-assets/*
           tag_name: ${{ needs.meta.outputs.tag }}
           prerelease: ${{ needs.meta.outputs.is_prerelease == 'true' }}
-          body: |
-            M9A CLI package release.
-
-            Source: `${{ needs.meta.outputs.source_repo }}`
-            Ref: `${{ needs.meta.outputs.source_ref }}`
+          body: ${{ needs.meta.outputs.release_body }}

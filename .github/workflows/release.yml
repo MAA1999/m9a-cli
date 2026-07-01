@@ -1,0 +1,270 @@
+name: Build CLI release
+
+on:
+  repository_dispatch:
+    types: [m9a-release]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish in this repository.
+        required: false
+        default: v0.0.0-local
+      source_repo:
+        description: M9A source repository.
+        required: false
+        default: MAA1999/M9A
+      source_ref:
+        description: M9A ref, tag, branch, or SHA to package.
+        required: false
+        default: main
+      maa_framework_version:
+        description: MaaFramework release tag.
+        required: false
+        default: v5.10.5
+      is_prerelease:
+        description: Publish as prerelease.
+        required: false
+        default: "true"
+
+permissions:
+  contents: write
+
+jobs:
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      source_repo: ${{ steps.meta.outputs.source_repo }}
+      source_ref: ${{ steps.meta.outputs.source_ref }}
+      maa_framework_version: ${{ steps.meta.outputs.maa_framework_version }}
+      is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
+    steps:
+      - id: meta
+        shell: bash
+        run: |
+          tag="${{ github.event.client_payload.tag || github.event.inputs.tag || 'v0.0.0-local' }}"
+          source_repo="${{ github.event.client_payload.source_repo || github.event.inputs.source_repo || 'MAA1999/M9A' }}"
+          source_ref="${{ github.event.client_payload.source_ref || github.event.client_payload.tag || github.event.inputs.source_ref || 'main' }}"
+          maa_framework_version="${{ github.event.client_payload.maa_framework_version || github.event.inputs.maa_framework_version || 'v5.10.5' }}"
+          is_prerelease="${{ github.event.client_payload.is_prerelease || github.event.inputs.is_prerelease || 'true' }}"
+
+          echo "tag=$tag" | tee -a "$GITHUB_OUTPUT"
+          echo "source_repo=$source_repo" | tee -a "$GITHUB_OUTPUT"
+          echo "source_ref=$source_ref" | tee -a "$GITHUB_OUTPUT"
+          echo "maa_framework_version=$maa_framework_version" | tee -a "$GITHUB_OUTPUT"
+          echo "is_prerelease=$is_prerelease" | tee -a "$GITHUB_OUTPUT"
+
+  windows:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: windows-latest
+          - arch: aarch64
+            runner: windows-11-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout M9A source
+        shell: bash
+        run: |
+          git submodule set-url M9A "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
+          git submodule update --init --recursive --depth 1
+          git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"
+          git -C M9A checkout --detach FETCH_HEAD
+          git -C M9A submodule update --init --recursive --depth 1
+
+      - name: Download MaaFramework
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: MaaXYZ/MaaFramework
+          fileName: "MAA-win-${{ matrix.arch }}*"
+          tag: ${{ needs.meta.outputs.maa_framework_version }}
+          out-file-path: deps
+          extract: true
+
+      - name: Setup embedded Python
+        shell: bash
+        run: |
+          python M9A/tools/ci/setup_embed_python.py
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          cd M9A
+          ../install/python/python.exe tools/ci/download_deps.py --deps-dir ../install/deps
+          cd ..
+          ./install/python/python.exe -m pip install -U -r M9A/requirements.txt --no-warn-script-location --find-links install/deps --no-index
+
+      - name: Download drop_core module
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          cd M9A
+          ../install/python/python.exe tools/ci/download_drop_core.py --os windows --arch ${{ matrix.arch }} || echo "drop_core download skipped"
+
+      - name: Build CLI package
+        shell: bash
+        run: |
+          ./install/python/python.exe tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform win32
+          cp -rpvn install/python/. install-cli/python/
+          rm -rf install-cli/deps 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: M9A-win-${{ matrix.arch }}-${{ needs.meta.outputs.tag }}-PiCLI
+          path: install-cli
+
+  linux:
+    needs: meta
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [aarch64, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout M9A source
+        shell: bash
+        run: |
+          git submodule set-url M9A "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
+          git submodule update --init --recursive --depth 1
+          git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"
+          git -C M9A checkout --detach FETCH_HEAD
+          git -C M9A submodule update --init --recursive --depth 1
+
+      - name: Download MaaFramework
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: MaaXYZ/MaaFramework
+          fileName: "MAA-linux-${{ matrix.arch }}*"
+          tag: ${{ needs.meta.outputs.maa_framework_version }}
+          out-file-path: deps
+          extract: true
+
+      - name: Download drop_core module
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          cd M9A
+          python tools/ci/download_drop_core.py --os linux --arch ${{ matrix.arch }} || echo "drop_core download skipped"
+
+      - name: Build CLI package
+        shell: bash
+        run: |
+          python tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
+          if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: M9A-linux-${{ matrix.arch }}-${{ needs.meta.outputs.tag }}-PiCLI
+          path: install-cli
+
+  macos:
+    needs: meta
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+          - arch: aarch64
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout M9A source
+        shell: bash
+        run: |
+          git submodule set-url M9A "https://github.com/${{ needs.meta.outputs.source_repo }}.git"
+          git submodule update --init --recursive --depth 1
+          git -C M9A fetch --depth 1 origin "${{ needs.meta.outputs.source_ref }}"
+          git -C M9A checkout --detach FETCH_HEAD
+          git -C M9A submodule update --init --recursive --depth 1
+
+      - name: Download MaaFramework
+        uses: robinraju/release-downloader@v1
+        with:
+          repository: MaaXYZ/MaaFramework
+          fileName: "MAA-macos-${{ matrix.arch }}*"
+          tag: ${{ needs.meta.outputs.maa_framework_version }}
+          out-file-path: deps
+          extract: true
+
+      - name: Setup embedded Python
+        shell: bash
+        run: |
+          python3 M9A/tools/ci/setup_embed_python.py
+          chmod +x ./install/python/bin/python3
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          cd M9A
+          ../install/python/bin/python3 tools/ci/download_deps.py --deps-dir ../install/deps
+          cd ..
+          ./install/python/bin/python3 -m pip install -U -r M9A/requirements.txt --no-warn-script-location --find-links install/deps --no-index
+
+      - name: Download drop_core module
+        shell: bash
+        env:
+          PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
+        run: |
+          cd M9A
+          ../install/python/bin/python3 tools/ci/download_drop_core.py --os darwin --arch ${{ matrix.arch }} || echo "drop_core download skipped"
+
+      - name: Build CLI package
+        shell: bash
+        run: |
+          ./install/python/bin/python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform darwin
+          cp -rpvn install/python/. install-cli/python/
+          if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+          rm -rf install-cli/deps 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: M9A-macos-${{ matrix.arch }}-${{ needs.meta.outputs.tag }}-PiCLI
+          path: install-cli
+
+  release:
+    if: ${{ needs.meta.outputs.tag != 'v0.0.0-local' }}
+    needs: [meta, windows, linux, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+
+      - name: Process artifacts
+        shell: bash
+        run: |
+          cd release-assets
+          for f in *; do
+            if [[ -d "$f" && "$f" == *"win"* ]]; then
+              (cd "$f" && zip -r "../$f.zip" .)
+              rm -rf "$f"
+            elif [[ -d "$f" ]]; then
+              if [[ -f "$f/M9A" ]]; then chmod +x "$f/M9A"; fi
+              tar -czf "$f.tar.gz" "$f"
+              rm -rf "$f"
+            fi
+          done
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2.2.2
+        with:
+          files: release-assets/*
+          tag_name: ${{ needs.meta.outputs.tag }}
+          prerelease: ${{ needs.meta.outputs.is_prerelease == 'true' }}
+          body: |
+            M9A CLI package release.
+
+            Source: `${{ needs.meta.outputs.source_repo }}`
+            Ref: `${{ needs.meta.outputs.source_ref }}`

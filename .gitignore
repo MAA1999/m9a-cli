@@ -1,0 +1,11 @@
+deps/
+install/
+install-cli/
+install-cli-*/
+release-assets/
+*.zip
+*.tar.gz
+__pycache__/
+.pytest_cache/
+.venv/
+tmp/

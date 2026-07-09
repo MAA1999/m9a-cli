@@ -203,8 +203,8 @@ jobs:
         env:
           PYTHONPATH: M9A/tools/ci
         run: |
-          python ../tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
-            if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+            python tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
+              if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
 
       - uses: actions/upload-artifact@v7
         with:

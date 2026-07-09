@@ -20,7 +20,7 @@ on:
       maa_framework_version:
         description: MaaFramework release tag.
         required: false
-        default: v5.10.5
+        default: v5.11.1
       is_prerelease:
         description: Publish as prerelease.
         required: false
@@ -52,7 +52,9 @@ jobs:
           source_repo="$(jq -r '.client_payload.source_repo // .inputs.source_repo // "MAA1999/M9A"' "$GITHUB_EVENT_PATH")"
           source_ref="$(jq -r '.client_payload.source_ref // .client_payload.tag // .inputs.source_ref // "main"' "$GITHUB_EVENT_PATH")"
           source_sha="$(jq -r '.client_payload.source_sha // ""' "$GITHUB_EVENT_PATH")"
-          maa_framework_version="$(jq -r '.client_payload.maa_framework_version // .inputs.maa_framework_version // "v5.10.5"' "$GITHUB_EVENT_PATH")"
+          maa_framework_version="$(jq -r '.client_payload.maa_framework_version // .inputs.maa_framework_version // "v5.11.1"' "$GITHUB_EVENT_PATH")"
+          # "latest" means download the latest release; the downloader expects empty tag for that
+          if [ "$maa_framework_version" = "latest" ]; then maa_framework_version=""; fi
           is_prerelease="$(jq -r '.client_payload.is_prerelease // .inputs.is_prerelease // "true"' "$GITHUB_EVENT_PATH")"
           release_body="$(jq -r '.client_payload.release_body // .inputs.release_body // ""' "$GITHUB_EVENT_PATH")"
 
@@ -84,7 +86,7 @@ jobs:
             runner: windows-11-arm
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Checkout M9A source
         shell: bash
@@ -113,15 +115,25 @@ jobs:
       - name: Setup embedded Python
         shell: bash
         run: |
-          python M9A/tools/ci/setup_embed_python.py
+          python tools/ci/setup_embed_python.py
 
       - name: Install Python dependencies
         shell: bash
         run: |
           cd M9A
-          ../install/python/python.exe tools/ci/download_deps.py --deps-dir ../install/deps
+          ../install/python/python.exe ../tools/ci/download_deps.py --deps-dir ../install/deps
           cd ..
-          ./install/python/python.exe -m pip install -U -r M9A/requirements.txt --no-warn-script-location --find-links install/deps --no-index
+          python -c "
+          import tomllib
+          with open('M9A/pyproject.toml', 'rb') as f:
+              d = tomllib.load(f)
+          with open('requirements.txt', 'w') as out:
+              for dep in d['project']['dependencies']:
+                  out.write(dep + '\n')
+          "
+          ./install/python/python.exe -m pip install -U -r requirements.txt --no-warn-script-location --find-links install/deps --no-index
+          rm -f requirements.txt
+
 
       - name: Download drop_core module
         shell: bash
@@ -133,12 +145,14 @@ jobs:
 
       - name: Build CLI package
         shell: bash
+        env:
+          PYTHONPATH: M9A/tools/ci
         run: |
           ./install/python/python.exe tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform win32
-          cp -rpvn install/python/. install-cli/python/
-          rm -rf install-cli/deps 2>/dev/null || true
+            cp -rpvn install/python/. install-cli/python/
+            rm -rf install-cli/deps 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: M9A-win-${{ matrix.arch }}-${{ needs.meta.outputs.tag }}-PiCLI
           path: install-cli
@@ -151,7 +165,7 @@ jobs:
       matrix:
         arch: [aarch64, x86_64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Checkout M9A source
         shell: bash
@@ -182,16 +196,17 @@ jobs:
         env:
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          cd M9A
           python tools/ci/download_drop_core.py --os linux --arch ${{ matrix.arch }} || echo "drop_core download skipped"
 
       - name: Build CLI package
         shell: bash
+        env:
+          PYTHONPATH: M9A/tools/ci
         run: |
-          python tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
-          if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+          python ../tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
+            if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: M9A-linux-${{ matrix.arch }}-${{ needs.meta.outputs.tag }}-PiCLI
           path: install-cli
@@ -208,7 +223,7 @@ jobs:
             runner: macos-latest
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Checkout M9A source
         shell: bash
@@ -237,16 +252,25 @@ jobs:
       - name: Setup embedded Python
         shell: bash
         run: |
-          python3 M9A/tools/ci/setup_embed_python.py
+          python3 tools/ci/setup_embed_python.py
           chmod +x ./install/python/bin/python3
 
       - name: Install Python dependencies
         shell: bash
         run: |
           cd M9A
-          ../install/python/bin/python3 tools/ci/download_deps.py --deps-dir ../install/deps
+          ../install/python/bin/python3 ../tools/ci/download_deps.py --deps-dir ../install/deps
           cd ..
-          ./install/python/bin/python3 -m pip install -U -r M9A/requirements.txt --no-warn-script-location --find-links install/deps --no-index
+          python3 -c "
+          import tomllib
+          with open('M9A/pyproject.toml', 'rb') as f:
+              d = tomllib.load(f)
+          with open('requirements.txt', 'w') as out:
+              for dep in d['project']['dependencies']:
+                  out.write(dep + '\n')
+          "
+          ./install/python/bin/python3 -m pip install -U -r requirements.txt --no-warn-script-location --find-links install/deps --no-index
+          rm -f requirements.txt
 
       - name: Download drop_core module
         shell: bash
@@ -258,13 +282,15 @@ jobs:
 
       - name: Build CLI package
         shell: bash
+        env:
+          PYTHONPATH: M9A/tools/ci
         run: |
           ./install/python/bin/python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform darwin
-          cp -rpvn install/python/. install-cli/python/
-          if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
-          rm -rf install-cli/deps 2>/dev/null || true
+            cp -rpvn install/python/. install-cli/python/
+            if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+            rm -rf install-cli/deps 2>/dev/null || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: M9A-macos-${{ matrix.arch }}-${{ needs.meta.outputs.tag }}-PiCLI
           path: install-cli
@@ -274,7 +300,7 @@ jobs:
     needs: [meta, windows, linux, macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: release-assets
 
@@ -294,7 +320,7 @@ jobs:
           done
 
       - name: Publish release
-        uses: softprops/action-gh-release@v2.2.2
+        uses: softprops/action-gh-release@v3
         with:
           files: release-assets/*
           tag_name: ${{ needs.meta.outputs.tag }}

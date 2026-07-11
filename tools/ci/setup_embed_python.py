@@ -241,34 +241,49 @@ def main():
             print(f"错误: 不支持的 macOS 架构: {os_arch} -> {pbs_arch}")
             return
 
-        # 查询 astral-sh/python-build-standalone API 获取最新 release
+        # ?? astral-sh/python-build-standalone API ???? release
         api_url = "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
+        gh_api_path = "repos/astral-sh/python-build-standalone/releases/latest"
+        release = None
         try:
-            req = urllib.request.Request(api_url)
-            # Use GITHUB_TOKEN to avoid unauthenticated rate limiting (60/hr -> 5000/hr)
-            github_token = os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GH_TOKEN", "")
-            if github_token:
-                req.add_header("Authorization", f"Bearer {github_token}")
-            req.add_header("Accept", "application/vnd.github+json")
-            with urllib.request.urlopen(req) as resp:
-                release = json.loads(resp.read())
-            tag = release["tag_name"]
-            pattern = re.compile(
-                r"^cpython-" + PYTHON_STANDALONE_MINOR + r"\.\d+\+" + re.escape(tag)
-                + r"-" + re.escape(pbs_arch) + r"-apple-darwin-install_only_stripped\.tar\.gz$"
+            # Prefer gh CLI: pre-installed and authenticated in GitHub Actions
+            result = subprocess.run(
+                ["gh", "api", gh_api_path, "--jq", "."],
+                capture_output=True, text=True, check=True, timeout=30
             )
-            matched = None
-            for asset in release.get("assets", []):
-                if pattern.match(asset["name"]):
-                    matched = asset
-                    break
-            if not matched:
-                raise RuntimeError("No Python " + PYTHON_STANDALONE_MINOR + " asset for " + tag)
-            pbs_filename = matched["name"]
-            download_url = matched["browser_download_url"]
+            release = json.loads(result.stdout)
         except Exception as e:
-            print("Error resolving Python standalone version:", e)
+            print(f"gh CLI fetch failed ({e}), falling back to urllib...")
+
+        if release is None:
+            try:
+                req = urllib.request.Request(api_url)
+                # Use GITHUB_TOKEN to avoid unauthenticated rate limiting (60/hr -> 5000/hr)
+                github_token = os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GH_TOKEN", "")
+                if github_token:
+                    req.add_header("Authorization", f"Bearer {github_token}")
+                req.add_header("Accept", "application/vnd.github+json")
+                with urllib.request.urlopen(req) as resp:
+                    release = json.loads(resp.read())
+            except Exception as e:
+                print("Error resolving Python standalone version:", e)
+                return
+
+        tag = release["tag_name"]
+        pattern = re.compile(
+            r"^cpython-" + PYTHON_STANDALONE_MINOR + r"\.\d+\+" + re.escape(tag)
+            + r"-" + re.escape(pbs_arch) + r"-apple-darwin-install_only_stripped\.tar\.gz$"
+        )
+        matched = None
+        for asset in release.get("assets", []):
+            if pattern.match(asset["name"]):
+                matched = asset
+                break
+        if not matched:
+            print("Error: no matching " + PYTHON_STANDALONE_MINOR + " asset for " + tag)
             return
+        pbs_filename = matched["name"]
+        download_url = matched["browser_download_url"]
         tar_filename = pbs_filename
         tar_filepath = os.path.join(DEST_DIR, tar_filename)
 

@@ -245,6 +245,10 @@ def main():
         api_url = "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
         try:
             req = urllib.request.Request(api_url)
+            # Use GITHUB_TOKEN to avoid unauthenticated rate limiting (60/hr -> 5000/hr)
+            github_token = os.environ.get("GITHUB_TOKEN", "") or os.environ.get("GH_TOKEN", "")
+            if github_token:
+                req.add_header("Authorization", f"Bearer {github_token}")
             req.add_header("Accept", "application/vnd.github+json")
             with urllib.request.urlopen(req) as resp:
                 release = json.loads(resp.read())

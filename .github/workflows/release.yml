@@ -42,6 +42,7 @@ jobs:
       source_ref: ${{ steps.meta.outputs.source_ref }}
       source_sha: ${{ steps.meta.outputs.source_sha }}
       maa_framework_version: ${{ steps.meta.outputs.maa_framework_version }}
+      is_latest_framework: ${{ steps.meta.outputs.is_latest_framework }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
       release_body: ${{ steps.meta.outputs.release_body }}
     steps:
@@ -53,8 +54,11 @@ jobs:
           source_ref="$(jq -r '.client_payload.source_ref // .client_payload.tag // .inputs.source_ref // "main"' "$GITHUB_EVENT_PATH")"
           source_sha="$(jq -r '.client_payload.source_sha // ""' "$GITHUB_EVENT_PATH")"
           maa_framework_version="$(jq -r '.client_payload.maa_framework_version // .inputs.maa_framework_version // "v5.11.1"' "$GITHUB_EVENT_PATH")"
-          # "latest" means download the latest release; the downloader expects empty tag for that
-          if [ "$maa_framework_version" = "latest" ]; then maa_framework_version=""; fi
+          is_latest_framework="false"
+          if [ "$maa_framework_version" = "latest" ]; then
+            maa_framework_version=""
+            is_latest_framework="true"
+          fi
           is_prerelease="$(jq -r '.client_payload.is_prerelease // .inputs.is_prerelease // "true"' "$GITHUB_EVENT_PATH")"
           release_body="$(jq -r '.client_payload.release_body // .inputs.release_body // ""' "$GITHUB_EVENT_PATH")"
 
@@ -68,6 +72,7 @@ jobs:
             echo "source_ref=$source_ref"
             echo "source_sha=$source_sha"
             echo "maa_framework_version=$maa_framework_version"
+            echo "is_latest_framework=$is_latest_framework"
             echo "is_prerelease=$is_prerelease"
             echo "release_body<<__M9A_RELEASE_BODY__"
             printf '%s\n' "$release_body"
@@ -111,6 +116,7 @@ jobs:
           tag: ${{ needs.meta.outputs.maa_framework_version }}
           out-file-path: deps
           extract: true
+          latest: ${{ needs.meta.outputs.is_latest_framework }}
 
       - name: Setup embedded Python
         shell: bash
@@ -190,6 +196,7 @@ jobs:
           tag: ${{ needs.meta.outputs.maa_framework_version }}
           out-file-path: deps
           extract: true
+          latest: ${{ needs.meta.outputs.is_latest_framework }}
 
       - name: Download drop_core module
         shell: bash
@@ -248,6 +255,7 @@ jobs:
           tag: ${{ needs.meta.outputs.maa_framework_version }}
           out-file-path: deps
           extract: true
+          latest: ${{ needs.meta.outputs.is_latest_framework }}
 
       - name: Setup embedded Python
         shell: bash

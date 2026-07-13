@@ -59,6 +59,9 @@ jobs:
             maa_framework_version=""
             is_latest_framework="true"
           fi
+          if [ -z "$maa_framework_version" ]; then
+            is_latest_framework="true"
+          fi
           is_prerelease="$(jq -r '.client_payload.is_prerelease // .inputs.is_prerelease // "true"' "$GITHUB_EVENT_PATH")"
           release_body="$(jq -r '.client_payload.release_body // .inputs.release_body // ""' "$GITHUB_EVENT_PATH")"
 

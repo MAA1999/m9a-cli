@@ -18,9 +18,18 @@ on:
         required: false
         default: main
       maa_framework_version:
-        description: MaaFramework release tag.
+        description: Exact MaaFramework release tag. Overrides the channel when non-empty.
         required: false
-        default: v5.11.1
+        default: ""
+      maa_framework_channel:
+        description: MaaFramework release channel used when no exact version is set.
+        required: false
+        type: choice
+        options:
+          - stable
+          - beta
+          - alpha
+        default: stable
       is_prerelease:
         description: Publish as prerelease.
         required: false
@@ -42,6 +51,7 @@ jobs:
       source_ref: ${{ steps.meta.outputs.source_ref }}
       source_sha: ${{ steps.meta.outputs.source_sha }}
       maa_framework_version: ${{ steps.meta.outputs.maa_framework_version }}
+      maa_framework_channel: ${{ steps.meta.outputs.maa_framework_channel }}
       is_latest_framework: ${{ steps.meta.outputs.is_latest_framework }}
       is_prerelease: ${{ steps.meta.outputs.is_prerelease }}
       release_body: ${{ steps.meta.outputs.release_body }}
@@ -53,14 +63,55 @@ jobs:
           source_repo="$(jq -r '.client_payload.source_repo // .inputs.source_repo // "MAA1999/M9A"' "$GITHUB_EVENT_PATH")"
           source_ref="$(jq -r '.client_payload.source_ref // .client_payload.tag // .inputs.source_ref // "main"' "$GITHUB_EVENT_PATH")"
           source_sha="$(jq -r '.client_payload.source_sha // ""' "$GITHUB_EVENT_PATH")"
-          maa_framework_version="$(jq -r '.client_payload.maa_framework_version // .inputs.maa_framework_version // "v5.11.1"' "$GITHUB_EVENT_PATH")"
+          maa_framework_channel="$(jq -r '.client_payload.maa_framework_channel // .inputs.maa_framework_channel // "stable"' "$GITHUB_EVENT_PATH")"
+          maa_framework_version="$(jq -r '.client_payload.maa_framework_version // .inputs.maa_framework_version // ""' "$GITHUB_EVENT_PATH")"
           is_latest_framework="false"
           if [ "$maa_framework_version" = "latest" ]; then
+            maa_framework_channel="stable"
             maa_framework_version=""
-            is_latest_framework="true"
           fi
           if [ -z "$maa_framework_version" ]; then
-            is_latest_framework="true"
+            case "$maa_framework_channel" in
+              stable)
+                is_latest_framework="true"
+                ;;
+              beta|alpha)
+                maa_framework_version="$(python3 - "$maa_framework_channel" <<'PY'
+          import json
+          import re
+          import subprocess
+          import sys
+
+          channel = sys.argv[1]
+          releases = json.loads(
+              subprocess.check_output(
+                  ["gh", "api", "repos/MaaXYZ/MaaFramework/releases?per_page=100"],
+                  text=True,
+              )
+          )
+
+          def maturity(tag):
+              if re.search(r"(?:^|[.-])alpha(?:[.-]|$)", tag, re.IGNORECASE):
+                  return "alpha"
+              if re.search(r"(?:^|[.-])(?:beta|rc)(?:[.-]|$)", tag, re.IGNORECASE):
+                  return "beta"
+              return "stable"
+
+          priority = {"stable": 2, "beta": 1, "alpha": 0}
+          for release in releases:
+              if not release.get("draft") and priority[maturity(release["tag_name"])] >= priority[channel]:
+                  print(release["tag_name"])
+                  break
+          else:
+              raise SystemExit(f"No MaaFramework release found for channel {channel}")
+          PY
+                )"
+                ;;
+              *)
+                echo "Unsupported MaaFramework channel: $maa_framework_channel" >&2
+                exit 1
+                ;;
+            esac
           fi
           is_prerelease="$(jq -r '.client_payload.is_prerelease // .inputs.is_prerelease // "true"' "$GITHUB_EVENT_PATH")"
           release_body="$(jq -r '.client_payload.release_body // .inputs.release_body // ""' "$GITHUB_EVENT_PATH")"
@@ -74,6 +125,7 @@ jobs:
             echo "source_repo=$source_repo"
             echo "source_ref=$source_ref"
             echo "source_sha=$source_sha"
+            echo "maa_framework_channel=$maa_framework_channel"
             echo "maa_framework_version=$maa_framework_version"
             echo "is_latest_framework=$is_latest_framework"
             echo "is_prerelease=$is_prerelease"
@@ -81,6 +133,8 @@ jobs:
             printf '%s\n' "$release_body"
             echo "__M9A_RELEASE_BODY__"
           } | tee -a "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ github.token }}
 
   windows:
     needs: meta

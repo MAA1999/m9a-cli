@@ -10,7 +10,7 @@ version, and release notes.
 
 1. `MAA1999/M9A` publishes a normal release.
 2. The M9A workflow sends a `repository_dispatch` event to `MAA1999/m9a-cli`.
-3. This repository clones the matching M9A ref, downloads MaaFramework, and
+3. This repository clones the matching M9A ref, resolves MaaFramework from an exact version or the stable/beta/alpha channel, and
    builds `PiCLI` artifacts.
 4. The artifacts are published to the same tag name in this repository, reusing
    the release notes passed from `MAA1999/M9A`.

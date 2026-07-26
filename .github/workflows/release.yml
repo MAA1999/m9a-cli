@@ -113,7 +113,14 @@ jobs:
                 ;;
             esac
           fi
-          is_prerelease="$(jq -r '.client_payload.is_prerelease // .inputs.is_prerelease // "true"' "$GITHUB_EVENT_PATH")"
+          is_prerelease="$(jq -r 'if .client_payload.is_prerelease != null then .client_payload.is_prerelease elif .inputs.is_prerelease != null then .inputs.is_prerelease else empty end' "$GITHUB_EVENT_PATH")"
+          if [ -z "$is_prerelease" ]; then
+            if [[ "$tag" == *-* ]]; then
+              is_prerelease="true"
+            else
+              is_prerelease="false"
+            fi
+          fi
           release_body="$(jq -r '.client_payload.release_body // .inputs.release_body // ""' "$GITHUB_EVENT_PATH")"
 
           if [ -z "$release_body" ]; then
@@ -197,7 +204,6 @@ jobs:
           ./install/python/python.exe -m pip install -U -r requirements.txt --no-warn-script-location --find-links install/deps --no-index
           rm -f requirements.txt
 
-
       - name: Download drop_core module
         shell: bash
         env:
@@ -267,8 +273,8 @@ jobs:
         env:
           PYTHONPATH: M9A/tools/ci
         run: |
-            python tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
-              if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+          python tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
+            if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
 
       - uses: actions/upload-artifact@v7
         with:

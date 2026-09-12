@@ -30,10 +30,13 @@ def strip_html_from_interface(obj: dict[str, Any] | list[Any]) -> None:
 def release_agent_child_exec(platform: str) -> str:
     if platform.startswith("win"):
         return r"./python/python.exe"
-    if platform.startswith("darwin") or platform.startswith("macos") or platform.startswith("osx"):
+    if (
+        platform.startswith("darwin")
+        or platform.startswith("macos")
+        or platform.startswith("osx")
+        or platform.startswith("linux")
+    ):
         return r"./python/bin/python3"
-    if platform.startswith("linux"):
-        return r"python3"
     raise RuntimeError(f"Unsupported release platform: {platform}")
 
 
@@ -49,7 +52,9 @@ def iter_agent_configs(interface: dict[str, Any]) -> list[dict[str, Any]]:
 def configure_release_agent(interface: dict[str, Any], platform: str) -> None:
     for agent in iter_agent_configs(interface):
         agent["child_exec"] = release_agent_child_exec(platform)
-        agent["child_args"] = ["-u", r"./agent/bootstrap.py"]
+        # Every package ships its own interpreter with the Agent dependencies preinstalled,
+        # so the Agent always starts through agent/main.py (no bootstrap, no runtime install).
+        agent["child_args"] = ["-u", r"./agent/main.py"]
     assert_release_agent_config(interface)
 
 
@@ -127,7 +132,9 @@ def install_resource(source_dir: Path, output_dir: Path, version: str) -> None:
 
 
 def install_chores(source_dir: Path, output_dir: Path) -> None:
-    for name in ["README.md", "LICENSE", "CONTACT", "requirements.txt"]:
+    # requirements.txt is intentionally not shipped: the package interpreter already has
+    # every dependency preinstalled.
+    for name in ["README.md", "LICENSE", "CONTACT"]:
         source = source_dir / name
         if source.exists():
             shutil.copy2(source, output_dir / name)

@@ -16,7 +16,6 @@ print(os.getcwd())
 # 可以根据需要修改这些值
 PYTHON_VERSION_TARGET = "3.13.14"  # 目标 Python 版本
 PYTHON_STANDALONE_MINOR = "3.13"
-PYTHON_STANDALONE_MINOR = "3.13"
 # python-build-standalone 的发布标签，需要与 PYTHON_VERSION_TARGET 兼容
 DEST_DIR = os.path.join("install", "python")  # Python 安装的目标目录
 
@@ -72,7 +71,7 @@ def get_python_executable_path(base_dir, os_type):
     """获取已安装 Python 环境中的可执行文件路径"""
     if os_type == "Windows":
         return os.path.join(base_dir, "python.exe")
-    elif os_type == "Darwin":  # macOS
+    elif os_type in ("Darwin", "Linux"):  # macOS / Linux (python-build-standalone)
         # python-build-standalone 通常包含 python 和 python3
         # 我们优先使用 python3 (通常 python 是指向 python3 的符号链接)
         py3_path = os.path.join(base_dir, "bin", "python3")
@@ -232,14 +231,16 @@ def main():
             return
         python_executable_final_path = get_python_executable_path(DEST_DIR, os_type)
 
-    elif os_type == "Darwin":  # macOS
+    elif os_type in ("Darwin", "Linux"):  # macOS / Linux: python-build-standalone
         # 映射platform.machine()到python-build-standalone的架构名称
         arch_mapping = {"x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}
         pbs_arch = arch_mapping.get(os_arch, os_arch)
 
         if pbs_arch not in ["x86_64", "aarch64"]:
-            print(f"错误: 不支持的 macOS 架构: {os_arch} -> {pbs_arch}")
+            print(f"错误: 不支持的 {os_type} 架构: {os_arch} -> {pbs_arch}")
             return
+
+        pbs_triple = f"{pbs_arch}-apple-darwin" if os_type == "Darwin" else f"{pbs_arch}-unknown-linux-gnu"
 
         # ?? astral-sh/python-build-standalone API ???? release
         api_url = "https://api.github.com/repos/astral-sh/python-build-standalone/releases/latest"
@@ -272,7 +273,7 @@ def main():
         tag = release["tag_name"]
         pattern = re.compile(
             r"^cpython-" + PYTHON_STANDALONE_MINOR + r"\.\d+\+" + re.escape(tag)
-            + r"-" + re.escape(pbs_arch) + r"-apple-darwin-install_only_stripped\.tar\.gz$"
+            + r"-" + re.escape(pbs_triple) + r"-install_only_stripped\.tar\.gz$"
         )
         matched = None
         for asset in release.get("assets", []):
@@ -308,7 +309,7 @@ def main():
                 shutil.rmtree(temp_extract_dir)
                 return
         except Exception as e:
-            print(f"macOS Python 下载或解压失败: {e}")
+            print(f"{os_type} Python 下载或解压失败: {e}")
             if os.path.exists(temp_extract_dir):
                 shutil.rmtree(temp_extract_dir)
             return

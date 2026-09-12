@@ -228,11 +228,17 @@ jobs:
 
   linux:
     needs: meta
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        arch: [aarch64, x86_64]
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          # Native arm64 runner: the aarch64 interpreter, its wheels and the dependency
+          # download all follow the host architecture.
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v7
 
@@ -261,20 +267,45 @@ jobs:
           extract: true
           latest: ${{ needs.meta.outputs.is_latest_framework }}
 
+      - name: Setup embedded Python
+        shell: bash
+        run: |
+          python3 tools/ci/setup_embed_python.py
+          chmod +x ./install/python/bin/python3
+
+      - name: Install Python dependencies
+        shell: bash
+        run: |
+          cd M9A
+          ../install/python/bin/python3 ../tools/ci/download_deps.py --deps-dir ../install/deps
+          cd ..
+          python3 -c "
+          import tomllib
+          with open('M9A/pyproject.toml', 'rb') as f:
+              d = tomllib.load(f)
+          with open('requirements.txt', 'w') as out:
+              for dep in d['project']['dependencies']:
+                  out.write(dep + '\n')
+          "
+          ./install/python/bin/python3 -m pip install -U -r requirements.txt --no-warn-script-location --find-links install/deps --no-index
+          rm -f requirements.txt
+
       - name: Download drop_core module
         shell: bash
         env:
           PRIVATE_REPO_TOKEN: ${{ secrets.PRIVATE_REPO_TOKEN }}
         run: |
-          python tools/ci/download_drop_core.py --os linux --arch ${{ matrix.arch }} || echo "drop_core download skipped"
+          python3 tools/ci/download_drop_core.py --os linux --arch ${{ matrix.arch }} || echo "drop_core download skipped"
 
       - name: Build CLI package
         shell: bash
         env:
           PYTHONPATH: M9A/tools/ci
         run: |
-          python tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
-            if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
+          python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux
+          cp -rpvn install/python/. install-cli/python/
+          rm -rf install-cli/deps 2>/dev/null || true
+          if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
 
       - uses: actions/upload-artifact@v7
         with:

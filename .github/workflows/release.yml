@@ -269,9 +269,12 @@ jobs:
 
       - name: Setup embedded Python
         shell: bash
+        env:
+          # gh / urllib both need a token here: the release lookup hits the GitHub API.
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 tools/ci/setup_embed_python.py
-          chmod +x ./install/python/bin/python3
+          if [ -f ./install/python/bin/python3 ]; then chmod +x ./install/python/bin/python3; fi
 
       - name: Install Python dependencies
         shell: bash
@@ -353,9 +356,12 @@ jobs:
 
       - name: Setup embedded Python
         shell: bash
+        env:
+          # gh / urllib both need a token here: the release lookup hits the GitHub API.
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 tools/ci/setup_embed_python.py
-          chmod +x ./install/python/bin/python3
+          if [ -f ./install/python/bin/python3 ]; then chmod +x ./install/python/bin/python3; fi
 
       - name: Install Python dependencies
         shell: bash

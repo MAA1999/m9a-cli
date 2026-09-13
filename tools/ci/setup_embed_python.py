@@ -22,6 +22,12 @@ DEST_DIR = os.path.join("install", "python")  # Python 安装的目标目录
 # --- 辅助函数 ---
 
 
+def fail(message):
+    """打印致命错误并以非零状态退出，避免 CI 把失败误判为成功。"""
+    print(f"错误: {message}")
+    raise SystemExit(1)
+
+
 def download_file(url, dest_path):
     """下载文件到指定路径"""
     print(f"正在下载: {url}")
@@ -132,7 +138,7 @@ def main():
         if ensure_pip(python_exe_check, DEST_DIR):
             print("Python 和 pip 已配置。跳过安装。")
         else:
-            print("Python 存在但 pip 配置失败。请检查。")
+            fail("Python 存在但 pip 配置失败。")
         return
 
     if os.path.exists(DEST_DIR):
@@ -140,8 +146,7 @@ def main():
         try:
             shutil.rmtree(DEST_DIR)
         except OSError as e:
-            print(f"清理目录 {DEST_DIR} 失败: {e}。请手动删除后重试。")
-            return
+            fail(f"清理目录 {DEST_DIR} 失败: {e}。请手动删除后重试。")
 
     os.makedirs(DEST_DIR, exist_ok=True)
     print(f"已创建目录: {DEST_DIR}")
@@ -168,8 +173,7 @@ def main():
         win_arch_suffix = arch_mapping.get(os_arch, os_arch.lower())
 
         if win_arch_suffix not in ["amd64", "arm64"]:
-            print(f"错误: 不支持的Windows架构: {os_arch} -> {win_arch_suffix}")
-            return
+            fail(f"不支持的Windows架构: {os_arch} -> {win_arch_suffix}")
 
         print(f"使用Windows架构: {os_arch} -> {win_arch_suffix}")
 
@@ -181,8 +185,7 @@ def main():
             download_file(download_url, zip_filepath)
             extract_zip(zip_filepath, DEST_DIR)
         except Exception as e:
-            print(f"Windows Python 下载或解压失败: {e}")
-            return
+            fail(f"Windows Python 下载或解压失败: {e}")
         finally:
             if os.path.exists(zip_filepath):
                 os.remove(zip_filepath)
@@ -204,8 +207,7 @@ def main():
             if found_pth_files:
                 pth_file_path = os.path.join(DEST_DIR, found_pth_files[0])
             else:
-                print(f"错误: 未在 {DEST_DIR} 中找到 ._pth 文件。")
-                return
+                fail(f"未在 {DEST_DIR} 中找到 ._pth 文件。")
 
         print(f"正在修改 ._pth 文件: {pth_file_path}")
         try:
@@ -227,8 +229,7 @@ def main():
                 f.truncate()
             print("._pth 文件修改完成。")
         except Exception as e:
-            print(f"修改 ._pth 文件失败: {e}")
-            return
+            fail(f"修改 ._pth 文件失败: {e}")
         python_executable_final_path = get_python_executable_path(DEST_DIR, os_type)
 
     elif os_type in ("Darwin", "Linux"):  # macOS / Linux: python-build-standalone
@@ -237,8 +238,7 @@ def main():
         pbs_arch = arch_mapping.get(os_arch, os_arch)
 
         if pbs_arch not in ["x86_64", "aarch64"]:
-            print(f"错误: 不支持的 {os_type} 架构: {os_arch} -> {pbs_arch}")
-            return
+            fail(f"不支持的 {os_type} 架构: {os_arch} -> {pbs_arch}")
 
         pbs_triple = f"{pbs_arch}-apple-darwin" if os_type == "Darwin" else f"{pbs_arch}-unknown-linux-gnu"
 
@@ -247,7 +247,9 @@ def main():
         gh_api_path = "repos/astral-sh/python-build-standalone/releases/latest"
         release = None
         try:
-            # Prefer gh CLI: pre-installed and authenticated in GitHub Actions
+            # Prefer gh CLI: it is pre-installed in GitHub Actions, but it is only
+            # authenticated when the caller exports GH_TOKEN/GITHUB_TOKEN (otherwise
+            # gh exits with code 4), so keep the urllib fallback below.
             result = subprocess.run(
                 ["gh", "api", gh_api_path, "--jq", "."],
                 capture_output=True, text=True, check=True, timeout=30
@@ -267,8 +269,7 @@ def main():
                 with urllib.request.urlopen(req) as resp:
                     release = json.loads(resp.read())
             except Exception as e:
-                print("Error resolving Python standalone version:", e)
-                return
+                fail(f"Error resolving Python standalone version: {e}")
 
         tag = release["tag_name"]
         pattern = re.compile(
@@ -281,38 +282,43 @@ def main():
                 matched = asset
                 break
         if not matched:
-            print("Error: no matching " + PYTHON_STANDALONE_MINOR + " asset for " + tag)
-            return
+            fail(
+                "no matching "
+                + PYTHON_STANDALONE_MINOR
+                + " asset for "
+                + tag
+                + " ("
+                + pbs_triple
+                + ")"
+            )
         pbs_filename = matched["name"]
         download_url = matched["browser_download_url"]
         tar_filename = pbs_filename
         tar_filepath = os.path.join(DEST_DIR, tar_filename)
 
+        temp_extract_dir = os.path.join(DEST_DIR, "_temp_extract")
         try:
             download_file(download_url, tar_filepath)
             # python-build-standalone 的包解压后通常包含一个名为 'python' 的顶层目录
             # 我们需要将这个 'python' 目录的内容移动到 DEST_DIR
-            temp_extract_dir = os.path.join(DEST_DIR, "_temp_extract")
             os.makedirs(temp_extract_dir, exist_ok=True)
             extract_tar(tar_filepath, temp_extract_dir)
 
             extracted_python_root = os.path.join(temp_extract_dir, "python")
-            if os.path.isdir(extracted_python_root):
-                print(f"正在移动 {extracted_python_root} 的内容到 {DEST_DIR}")
-                for item_name in os.listdir(extracted_python_root):
-                    s = os.path.join(extracted_python_root, item_name)
-                    d = os.path.join(DEST_DIR, item_name)
-                    shutil.move(s, d)
-                shutil.rmtree(temp_extract_dir)  # 清理临时解压目录
-            else:
-                print(f"错误: 解压后未找到预期的 'python' 子目录于 {temp_extract_dir}")
-                shutil.rmtree(temp_extract_dir)
-                return
+            if not os.path.isdir(extracted_python_root):
+                fail(f"解压后未找到预期的 'python' 子目录于 {temp_extract_dir}")
+            print(f"正在移动 {extracted_python_root} 的内容到 {DEST_DIR}")
+            for item_name in os.listdir(extracted_python_root):
+                s = os.path.join(extracted_python_root, item_name)
+                d = os.path.join(DEST_DIR, item_name)
+                shutil.move(s, d)
+            shutil.rmtree(temp_extract_dir)  # 清理临时解压目录
+        except SystemExit:
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+            raise
         except Exception as e:
-            print(f"{os_type} Python 下载或解压失败: {e}")
-            if os.path.exists(temp_extract_dir):
-                shutil.rmtree(temp_extract_dir)
-            return
+            shutil.rmtree(temp_extract_dir, ignore_errors=True)
+            fail(f"{os_type} Python 下载或解压失败: {e}")
         finally:
             if os.path.exists(tar_filepath):
                 os.remove(tar_filepath)
@@ -335,14 +341,12 @@ def main():
                         print(f"  为 {item_name} 设置执行权限失败: {e}")
         python_executable_final_path = get_python_executable_path(DEST_DIR, os_type)
     else:
-        print(f"错误: 不支持的操作系统: {os_type}")
-        return
+        fail(f"不支持的操作系统: {os_type}")
 
     if not python_executable_final_path or not os.path.exists(
         python_executable_final_path
     ):
-        print("错误: Python 可执行文件在安装后未找到。")
-        return
+        fail("Python 可执行文件在安装后未找到。")
 
     print(f"Python 环境已初步设置在: {DEST_DIR}")
     print(f"Python 可执行文件: {python_executable_final_path}")
@@ -351,7 +355,7 @@ def main():
     if ensure_pip(python_executable_final_path, DEST_DIR):
         print("嵌入式 Python 环境安装和 pip 配置完成。")
     else:
-        print("嵌入式 Python 环境安装完成，但 pip 配置失败。")
+        fail("嵌入式 Python 环境安装完成，但 pip 配置失败。")
 
 
 if __name__ == "__main__":

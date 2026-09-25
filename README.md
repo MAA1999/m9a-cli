@@ -26,4 +26,11 @@ python tools/ci/install_cli.py --source-dir D:\02code\M9A --deps-dir D:\02code\M
 ```
 
 The command expects a prepared MaaFramework `deps` directory. CI downloads it
-from `MaaXYZ/MaaFramework`.
+from `MaaXYZ/MaaFramework`. `--python-dir` defaults to `install/python`, which
+`tools/ci/setup_embed_python.py` prepares.
+
+The build strips the MaaFramework copy bundled in the embedded interpreter's `maa`
+wheel -- the Agent reaches the flattened copy at the package root through
+`MAAFW_BINARY_PATH` -- and then runs the packaged Agent once. A `--source-dir` that
+predates the `agent/maafw_paths.py` helper is rejected before anything is stripped,
+so a stale M9A ref cannot produce a package that only breaks on the user machine.

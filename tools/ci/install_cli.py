@@ -267,6 +267,13 @@ def install_manifest_cache(source_dir: Path, output_dir: Path) -> None:
 
 
 def rename_cli_binary(output_dir: Path) -> None:
+    """Rename the MaaPiCli entrypoint to M9A.
+
+    MaaPiCli is being split out to MaaXYZ/MaaPiCli and may be dropped from the
+    MAA-* runtime packages of a future MaaFramework release. A package without
+    the CLI entrypoint is unusable, so a missing binary must fail the build
+    here instead of shipping an entrypoint-less archive.
+    """
     candidates = [
         (output_dir / "MaaPiCli.exe", output_dir / "M9A.exe"),
         (output_dir / "MaaPiCli", output_dir / "M9A"),
@@ -277,7 +284,11 @@ def rename_cli_binary(output_dir: Path) -> None:
                 target.unlink()
             source.rename(target)
             return
-    print("Warning: MaaPiCli binary not found; skip rename.")
+    raise RuntimeError(
+        f"MaaPiCli binary not found in the package; the MaaFramework runtime bundle "
+        f"at {output_dir} no longer ships one. Fetch MaaPiCli from MaaXYZ/MaaPiCli "
+        f"(asset prefix MAA-MaaPiCli-, os segment windows/linux/macos) instead."
+    )
 
 
 def parse_args() -> argparse.Namespace:

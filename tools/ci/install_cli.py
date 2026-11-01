@@ -2,12 +2,48 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform as host_platform
 import re
 import shutil
 import subprocess
 import sys
+import urllib.request
+import zipfile
 from pathlib import Path
 from typing import Any, cast
+
+MAA_PICLI_REPO = "MaaXYZ/MaaPiCli"
+
+# MaaPiCli release assets are named MAA-MaaPiCli-<os>-<arch>-<tag>.zip.
+MAA_PICLI_ASSET_OS = {
+    "win32": "windows",
+    "windows": "windows",
+    "linux": "linux",
+    "darwin": "macos",
+    "macos": "macos",
+    "osx": "macos",
+}
+
+MAA_PICLI_ASSET_ARCH = {
+    "x86_64": "x86_64",
+    "amd64": "x86_64",
+    "aarch64": "aarch64",
+    "arm64": "aarch64",
+}
+
+# MaaPiCli prints these when the interface tree does not match the ProjectInterface
+# schema it was built against (a `welcome` array against a string-only field, say).
+INTERFACE_PARSE_FAILURE_MARKERS = (
+    "json is not an InterfaceData",
+    "Failed to parse interface.json",
+)
+
+# The CLI resolves interface.json, every import and every option before asking for a
+# controller, so the prompt is proof that the whole tree parsed.
+CONTROLLER_PROMPT_MARKER = "Select controller"
+
+CLI_SMOKE_TIMEOUT_SECONDS = 60
 
 
 def strip_html_tags(text: str) -> str:
@@ -266,29 +302,158 @@ def install_manifest_cache(source_dir: Path, output_dir: Path) -> None:
         print("Warning: users will do full manifest check on first run.")
 
 
-def rename_cli_binary(output_dir: Path) -> None:
-    """Rename the MaaPiCli entrypoint to M9A.
+def cli_binary_name(platform_name: str) -> str:
+    return "M9A.exe" if platform_name.startswith("win") else "M9A"
 
-    MaaPiCli is being split out to MaaXYZ/MaaPiCli and may be dropped from the
-    MAA-* runtime packages of a future MaaFramework release. A package without
-    the CLI entrypoint is unusable, so a missing binary must fail the build
-    here instead of shipping an entrypoint-less archive.
+
+def maapicli_binary_name(platform_name: str) -> str:
+    return "MaaPiCli.exe" if platform_name.startswith("win") else "MaaPiCli"
+
+
+def normalize_arch(machine: str) -> str:
+    arch = MAA_PICLI_ASSET_ARCH.get(machine.strip().lower())
+    if arch is None:
+        raise RuntimeError(f"Unsupported MaaPiCli architecture: {machine}")
+    return arch
+
+
+def host_arch() -> str:
+    machine = host_platform.machine()
+    # Windows ARM64 shells can report AMD64 from platform.machine().
+    if host_platform.system() == "Windows" and "ARM64" in os.environ.get("PROCESSOR_IDENTIFIER", ""):
+        machine = "aarch64"
+    return normalize_arch(machine)
+
+
+def maapicli_asset_os(platform_name: str) -> str:
+    asset_os = MAA_PICLI_ASSET_OS.get(platform_name)
+    if asset_os is None:
+        raise RuntimeError(f"Unsupported MaaPiCli release platform: {platform_name}")
+    return asset_os
+
+
+def maapicli_asset_name(platform_name: str, arch: str, tag: str) -> str:
+    return f"MAA-MaaPiCli-{maapicli_asset_os(platform_name)}-{normalize_arch(arch)}-{tag}.zip"
+
+
+def github_headers(accept: str) -> dict[str, str]:
+    headers = {"Accept": accept, "User-Agent": "m9a-cli-packaging"}
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
+
+
+def github_json(url: str) -> Any:
+    request = urllib.request.Request(url, headers=github_headers("application/vnd.github+json"))
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.load(response)
+
+
+def resolve_maapicli_tag(tag: str) -> str:
+    if tag:
+        return tag
+    release = github_json(f"https://api.github.com/repos/{MAA_PICLI_REPO}/releases/latest")
+    resolved = release.get("tag_name") if isinstance(release, dict) else None
+    if not isinstance(resolved, str) or not resolved:
+        raise RuntimeError(f"No MaaPiCli release found in {MAA_PICLI_REPO}")
+    return resolved
+
+
+def maapicli_binary_path(root: Path, platform_name: str) -> Path:
+    name = maapicli_binary_name(platform_name)
+    for candidate in (root / "bin" / name, root / name):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"MaaPiCli binary not found under {root} (expected bin/{name})")
+
+
+def download_maapicli(maapicli_dir: Path, platform_name: str, arch: str, tag: str) -> Path:
+    resolved_tag = resolve_maapicli_tag(tag)
+    asset = maapicli_asset_name(platform_name, arch, resolved_tag)
+    url = f"https://github.com/{MAA_PICLI_REPO}/releases/download/{resolved_tag}/{asset}"
+    maapicli_dir.mkdir(parents=True, exist_ok=True)
+    archive = maapicli_dir / asset
+
+    print(f"Downloading MaaPiCli {resolved_tag}: {url}")
+    # Public release assets, and urllib forwards custom headers across the redirect to the
+    # object host, so the token is only used for the API lookup above.
+    request = urllib.request.Request(url, headers={"User-Agent": "m9a-cli-packaging"})
+    with urllib.request.urlopen(request, timeout=300) as response, open(archive, "wb") as out_file:
+        shutil.copyfileobj(response, out_file)
+    with zipfile.ZipFile(archive) as zip_file:
+        zip_file.extractall(maapicli_dir)
+    archive.unlink()
+
+    framework_version = maapicli_dir / "maafw-version.txt"
+    if framework_version.is_file():
+        print(f"MaaPiCli {resolved_tag} targets {framework_version.read_text(encoding='utf-8').strip()}")
+    return maapicli_binary_path(maapicli_dir, platform_name)
+
+
+def install_maapicli(output_dir: Path, maapicli_dir: Path, platform_name: str) -> Path:
+    """Ship the MaaPiCli entrypoint from MaaXYZ/MaaPiCli instead of the MaaFramework bundle.
+
+    MaaFramework is moving MaaPiCli out of its MAA-* runtime packages, and the copy it still
+    bundles lags the ProjectInterface revisions: MaaFramework v5.15.0-beta.1 deserializes
+    `welcome` as a single string, so an interface.json using the ordered array of PI 2.10
+    fails to load. The MaaPiCli releases carry the current parser, so the entrypoint is
+    taken from them and any copy left in the runtime bundle is dropped.
     """
-    candidates = [
-        (output_dir / "MaaPiCli.exe", output_dir / "M9A.exe"),
-        (output_dir / "MaaPiCli", output_dir / "M9A"),
-    ]
-    for source, target in candidates:
-        if source.exists():
-            if target.exists():
-                target.unlink()
-            source.rename(target)
-            return
-    raise RuntimeError(
-        f"MaaPiCli binary not found in the package; the MaaFramework runtime bundle "
-        f"at {output_dir} no longer ships one. Fetch MaaPiCli from MaaXYZ/MaaPiCli "
-        f"(asset prefix MAA-MaaPiCli-, os segment windows/linux/macos) instead."
-    )
+    binary = maapicli_binary_path(maapicli_dir, platform_name)
+    target = output_dir / cli_binary_name(platform_name)
+    for stale in (target, output_dir / maapicli_binary_name(platform_name)):
+        if stale.exists():
+            stale.unlink()
+
+    shutil.copy2(binary, target)
+    if not platform_name.startswith("win"):
+        target.chmod(0o755)
+    print(f"CLI entrypoint: {target} (from {binary})")
+    return target
+
+
+def assert_interface_parse_output(output: str) -> None:
+    for marker in INTERFACE_PARSE_FAILURE_MARKERS:
+        if marker in output:
+            raise RuntimeError(
+                f"Packaged CLI cannot parse the packaged interface.json ({marker}):\n{output[-4000:]}"
+            )
+    if CONTROLLER_PROMPT_MARKER not in output:
+        raise RuntimeError(
+            "Packaged CLI never reached the controller prompt, so interface.json did not "
+            f"fully resolve:\n{output[-4000:]}"
+        )
+
+
+def smoke_interface_parse(output_dir: Path, platform_name: str) -> None:
+    """Run the packaged CLI once so a package the CLI cannot load never ships.
+
+    Reads stdin from /dev/null so the controller prompt does not block, and accepts a
+    timeout only when the prompt already appeared in the captured output.
+    """
+    binary = output_dir / cli_binary_name(platform_name)
+    if not binary.is_file():
+        raise FileNotFoundError(f"CLI entrypoint not found: {binary}")
+
+    try:
+        result = subprocess.run(
+            [str(binary)],
+            cwd=output_dir,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=CLI_SMOKE_TIMEOUT_SECONDS,
+            check=False,
+        )
+        output = (result.stdout + result.stderr).decode("utf-8", "replace")
+    except subprocess.TimeoutExpired as exc:
+        partial = (exc.stdout or b"") + (exc.stderr or b"")
+        assert_interface_parse_output(partial.decode("utf-8", "replace"))
+        print("Packaged CLI interface smoke passed (timed out at the controller prompt).")
+        return
+
+    assert_interface_parse_output(output)
+    print("Packaged CLI interface smoke passed.")
 
 
 def parse_args() -> argparse.Namespace:
@@ -300,6 +465,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--python-dir", type=Path, default=root / "install" / "python")
     parser.add_argument("--version", default="v0.0.1")
     parser.add_argument("--platform", default=sys.platform)
+    parser.add_argument(
+        "--arch",
+        default=host_arch(),
+        help="Release architecture (x86_64 or aarch64). Defaults to the host.",
+    )
+    parser.add_argument("--maapicli-dir", type=Path, default=root / "install" / "maapicli")
+    parser.add_argument(
+        "--maapicli-tag",
+        default="",
+        help="Exact MaaXYZ/MaaPiCli release tag. Empty resolves the latest release.",
+    )
     return parser.parse_args()
 
 
@@ -308,6 +484,7 @@ def main() -> None:
     source_dir = args.source_dir.resolve()
     deps_dir = args.deps_dir.resolve()
     output_dir = args.output_dir.resolve()
+    maapicli_dir = args.maapicli_dir.resolve()
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -320,7 +497,9 @@ def main() -> None:
     install_chores(source_dir, output_dir)
     install_agent(source_dir, output_dir, args.platform)
     install_manifest_cache(source_dir, output_dir)
-    rename_cli_binary(output_dir)
+    download_maapicli(maapicli_dir, args.platform, args.arch, args.maapicli_tag)
+    install_maapicli(output_dir, maapicli_dir, args.platform)
+    smoke_interface_parse(output_dir, args.platform)
     smoke_packaged_agent(args.python_dir.resolve(), output_dir, args.platform)
 
     print(f"Install to {output_dir} successfully.")

@@ -44,7 +44,7 @@ on:
         default: ""
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   meta:
@@ -224,8 +224,9 @@ jobs:
         env:
           PYTHONPATH: M9A/tools/ci
           GH_TOKEN: ${{ github.token }}
+          MAAPICLI_TAG: ${{ needs.meta.outputs.maapicli_tag }}
         run: |
-          ./install/python/python.exe tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform win32 --arch ${{ matrix.arch }} --maapicli-tag "${{ needs.meta.outputs.maapicli_tag }}"
+          ./install/python/python.exe tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform win32 --arch ${{ matrix.arch }} --maapicli-tag "$MAAPICLI_TAG"
             cp -rpvn install/python/. install-cli/python/
             rm -rf install-cli/deps 2>/dev/null || true
 
@@ -313,8 +314,9 @@ jobs:
         env:
           PYTHONPATH: M9A/tools/ci
           GH_TOKEN: ${{ github.token }}
+          MAAPICLI_TAG: ${{ needs.meta.outputs.maapicli_tag }}
         run: |
-          python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux --arch ${{ matrix.arch }} --maapicli-tag "${{ needs.meta.outputs.maapicli_tag }}"
+          python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform linux --arch ${{ matrix.arch }} --maapicli-tag "$MAAPICLI_TAG"
           cp -rpvn install/python/. install-cli/python/
           rm -rf install-cli/deps 2>/dev/null || true
           if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
@@ -402,8 +404,9 @@ jobs:
         env:
           PYTHONPATH: M9A/tools/ci
           GH_TOKEN: ${{ github.token }}
+          MAAPICLI_TAG: ${{ needs.meta.outputs.maapicli_tag }}
         run: |
-          ./install/python/bin/python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform darwin --arch ${{ matrix.arch }} --maapicli-tag "${{ needs.meta.outputs.maapicli_tag }}"
+          ./install/python/bin/python3 tools/ci/install_cli.py --source-dir M9A --deps-dir deps --output-dir install-cli --version "${{ needs.meta.outputs.tag }}" --platform darwin --arch ${{ matrix.arch }} --maapicli-tag "$MAAPICLI_TAG"
             cp -rpvn install/python/. install-cli/python/
             if [ -f "install-cli/M9A" ]; then chmod +x install-cli/M9A; fi
             rm -rf install-cli/deps 2>/dev/null || true
@@ -417,6 +420,8 @@ jobs:
     if: ${{ needs.meta.outputs.tag != 'v0.0.0-local' }}
     needs: [meta, windows, linux, macos]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@v8
         with:

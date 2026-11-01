@@ -86,6 +86,18 @@ def test_install_maapicli_replaces_bundled_binary(tmp_path: Path) -> None:
     assert not (output_dir / "MaaPiCli.exe").exists()
 
 
+def test_subprocess_env_drops_release_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "secret")
+    monkeypatch.setenv("GITHUB_TOKEN", "secret")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = install_cli.subprocess_env_without_credentials()
+
+    assert "GH_TOKEN" not in env
+    assert "GITHUB_TOKEN" not in env
+    assert env["PATH"] == "/usr/bin"
+
+
 def test_assert_interface_parse_output_accepts_controller_prompt() -> None:
     install_cli.assert_interface_parse_output("### Select controller ###\n\n\t1. Controller.Adb\n")
 

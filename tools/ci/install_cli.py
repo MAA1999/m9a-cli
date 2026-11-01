@@ -45,6 +45,10 @@ CONTROLLER_PROMPT_MARKER = "Select controller"
 
 CLI_SMOKE_TIMEOUT_SECONDS = 60
 
+# The packaged CLI comes from another repository, so it must not inherit the release token
+# that the build step needs for the GitHub API and the release upload.
+CREDENTIAL_ENV_VARS = ("GH_TOKEN", "GITHUB_TOKEN")
+
 
 def strip_html_tags(text: str) -> str:
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
@@ -372,7 +376,10 @@ def download_maapicli(maapicli_dir: Path, platform_name: str, arch: str, tag: st
     resolved_tag = resolve_maapicli_tag(tag)
     asset = maapicli_asset_name(platform_name, arch, resolved_tag)
     url = f"https://github.com/{MAA_PICLI_REPO}/releases/download/{resolved_tag}/{asset}"
-    maapicli_dir.mkdir(parents=True, exist_ok=True)
+    # Start from an empty directory so a previous tag cannot leave assets behind.
+    if maapicli_dir.exists():
+        shutil.rmtree(maapicli_dir)
+    maapicli_dir.mkdir(parents=True)
     archive = maapicli_dir / asset
 
     print(f"Downloading MaaPiCli {resolved_tag}: {url}")
@@ -426,6 +433,10 @@ def assert_interface_parse_output(output: str) -> None:
         )
 
 
+def subprocess_env_without_credentials() -> dict[str, str]:
+    return {key: value for key, value in os.environ.items() if key not in CREDENTIAL_ENV_VARS}
+
+
 def smoke_interface_parse(output_dir: Path, platform_name: str) -> None:
     """Run the packaged CLI once so a package the CLI cannot load never ships.
 
@@ -444,6 +455,7 @@ def smoke_interface_parse(output_dir: Path, platform_name: str) -> None:
             capture_output=True,
             timeout=CLI_SMOKE_TIMEOUT_SECONDS,
             check=False,
+            env=subprocess_env_without_credentials(),
         )
         output = (result.stdout + result.stderr).decode("utf-8", "replace")
     except subprocess.TimeoutExpired as exc:
